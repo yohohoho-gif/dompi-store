@@ -1,14 +1,48 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCart } from "@/context/CartContext";
+import { createClient } from "@/lib/supabase/client";
+import { customerLogoutAction } from "@/app/actions/auth";
 
 export default function Navbar() {
+  const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const { totalItems, isHydrated } = useCart();
   const displayCartCount = isHydrated ? totalItems : 0;
+
+  useEffect(() => {
+    const supabase = createClient();
+
+    // Check initial session
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setIsAuthenticated(!!user);
+    });
+
+    // Listen for auth changes (login, logout, token refresh)
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsAuthenticated(!!session?.user);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const handleMobileSignOut = async () => {
+    setMobileMenuOpen(false);
+    const res = await customerLogoutAction();
+    if (res.success) {
+      router.push("/");
+      router.refresh();
+    }
+  };
 
   return (
     <header className="sticky top-0 z-50 w-full bg-white border-b border-neutral-200">
@@ -90,16 +124,23 @@ export default function Navbar() {
             </svg>
           </button>
 
-          {/* Account Button */}
-          <button
-            type="button"
-            className="p-2 text-black hover:text-neutral-500 rounded-[8px] transition-colors"
-            aria-label="Account"
+          {/* Customer Account Link */}
+          <Link
+            href={isAuthenticated ? "/account" : "/login"}
+            className="relative p-2 text-black hover:text-neutral-500 rounded-[8px] transition-colors inline-block"
+            aria-label={isAuthenticated ? "My Account" : "Sign In"}
+            title={isAuthenticated ? "My Account" : "Sign In"}
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
             </svg>
-          </button>
+            {isAuthenticated && (
+              <span
+                className="absolute top-2 right-2 w-1.5 h-1.5 bg-emerald-500 rounded-full"
+                title="Active Session"
+              />
+            )}
+          </Link>
 
           {/* Cart Link */}
           <Link
@@ -140,7 +181,7 @@ export default function Navbar() {
 
       {/* Mobile Drawer Menu */}
       {mobileMenuOpen && (
-        <div className="lg:hidden border-t border-neutral-200 bg-white px-6 py-6 space-y-4">
+        <div className="lg:hidden border-t border-neutral-200 bg-white px-6 py-6 space-y-5">
           <div className="flex flex-col space-y-3">
             <Link
               href="/shop"
@@ -171,7 +212,49 @@ export default function Navbar() {
               CONTACT
             </Link>
           </div>
-          <div className="pt-4 border-t border-neutral-100 flex gap-4 text-xs font-medium text-neutral-500">
+
+          {/* Mobile Auth Links */}
+          <div className="pt-4 border-t border-neutral-200 flex flex-col space-y-2">
+            {isAuthenticated ? (
+              <>
+                <Link
+                  href="/account"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="text-xs font-bold tracking-wider uppercase text-black hover:text-neutral-500 py-1.5 flex items-center justify-between"
+                >
+                  <span>MY ACCOUNT</span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleMobileSignOut}
+                  className="text-xs font-bold tracking-wider uppercase text-neutral-500 hover:text-red-600 text-left py-1"
+                >
+                  SIGN OUT
+                </button>
+              </>
+            ) : (
+              <div className="flex items-center gap-4 pt-1">
+                <Link
+                  href="/login"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="text-xs font-bold tracking-wider uppercase text-black hover:text-neutral-500"
+                >
+                  SIGN IN
+                </Link>
+                <span className="text-neutral-300">&bull;</span>
+                <Link
+                  href="/signup"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="text-xs font-bold tracking-wider uppercase text-neutral-500 hover:text-black"
+                >
+                  CREATE ACCOUNT
+                </Link>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-3 border-t border-neutral-100 flex gap-4 text-xs font-medium text-neutral-400">
             <span>CURRENCY: THB (฿)</span>
             <span>EN / TH</span>
           </div>

@@ -43,7 +43,7 @@ export async function middleware(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
 
-  // Protect /admin routes (except /admin/login)
+  // 1. Protect /admin routes (except /admin/login)
   if (pathname.startsWith("/admin") && pathname !== "/admin/login") {
     if (!user) {
       const loginUrl = new URL("/admin/login", request.url);
@@ -57,9 +57,23 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/admin", request.url));
   }
 
+  // 2. Protect Customer /account routes
+  if (pathname.startsWith("/account")) {
+    if (!user) {
+      const customerLoginUrl = new URL("/login", request.url);
+      customerLoginUrl.searchParams.set("next", pathname);
+      return NextResponse.redirect(customerLoginUrl);
+    }
+  }
+
+  // 3. If already authenticated and navigating to customer /login or /signup, redirect to /account
+  if ((pathname === "/login" || pathname === "/signup") && user) {
+    return NextResponse.redirect(new URL("/account", request.url));
+  }
+
   return response;
 }
 
 export const config = {
-  matcher: ["/admin/:path*"],
+  matcher: ["/admin/:path*", "/account/:path*", "/login", "/signup"],
 };
