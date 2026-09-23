@@ -11,6 +11,7 @@ export default function Navbar() {
   const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const { totalItems, isHydrated } = useCart();
   const displayCartCount = isHydrated ? totalItems : 0;
@@ -42,6 +43,16 @@ export default function Navbar() {
       router.push("/");
       router.refresh();
     }
+  };
+
+  const handleSearchSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const trimmed = searchQuery.trim();
+    if (!trimmed) return;
+
+    setSearchOpen(false);
+    setSearchQuery("");
+    router.push(`/shop?q=${encodeURIComponent(trimmed)}`);
   };
 
   return (
@@ -117,7 +128,8 @@ export default function Navbar() {
             type="button"
             onClick={() => setSearchOpen(!searchOpen)}
             className="p-2 text-black hover:text-neutral-500 rounded-[8px] transition-colors"
-            aria-label="Search"
+            aria-label={searchOpen ? "Close search bar" : "Open search bar"}
+            aria-expanded={searchOpen}
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
@@ -161,21 +173,35 @@ export default function Navbar() {
       {/* Expandable Search Bar */}
       {searchOpen && (
         <div className="border-t border-neutral-200 bg-neutral-50 px-4 py-3">
-          <div className="max-w-xl mx-auto flex items-center gap-2">
+          <form
+            role="search"
+            onSubmit={handleSearchSubmit}
+            className="max-w-xl mx-auto flex items-center gap-2"
+          >
+            <label htmlFor="navbar-search-input" className="sr-only">
+              Search products
+            </label>
             <input
-              type="text"
+              id="navbar-search-input"
+              type="search"
+              name="q"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search products, collections, categories..."
               className="flex-1 bg-white border border-neutral-300 rounded-[8px] px-4 py-2 text-sm text-black placeholder-neutral-400 focus:outline-none focus:border-black"
               autoFocus
             />
             <button
               type="button"
-              onClick={() => setSearchOpen(false)}
+              onClick={() => {
+                setSearchOpen(false);
+                setSearchQuery("");
+              }}
               className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-neutral-600 hover:text-black"
             >
               Close
             </button>
-          </div>
+          </form>
         </div>
       )}
 

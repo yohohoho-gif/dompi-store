@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "address:generate": "node scripts/generate-thailand-address.mjs",
+    "address:validate": "node scripts/validate-thailand-address.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

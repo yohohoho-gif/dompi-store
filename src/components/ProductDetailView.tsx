@@ -22,32 +22,86 @@ export default function ProductDetailView({
   const [selectedColor, setSelectedColor] = useState(
     product.colors && product.colors.length > 0 ? product.colors[0].name : "Standard"
   );
-  const [selectedSize, setSelectedSize] = useState(
-    product.sizes && product.sizes.length > 0 ? product.sizes[0] : "M"
-  );
+  const hasSizes = Boolean(product.sizes && product.sizes.length > 0);
+  const [selectedSize, setSelectedSize] = useState<string | null>(null);
   const [quantity, setQuantity] = useState(1);
   const [addedToCart, setAddedToCart] = useState(false);
   const [openSection, setOpenSection] = useState<string | null>("description");
 
-  // Dynamic stock derived from selected variant
-  const activeVariant = product.variants?.find(
-    (v) =>
-      v.color.toLowerCase() === selectedColor.toLowerCase() &&
-      v.size.toLowerCase() === selectedSize.toLowerCase()
-  );
-  const currentStock = activeVariant ? activeVariant.stock : (product.stock ?? 0);
-  const isAvailable = currentStock > 0;
+  // Helper to determine available stock for a specific size in a specific color
+  const getSizeStock = (sizeName: string, colorName: string): number => {
+    if (product.variants && product.variants.length > 0) {
+      const variant = product.variants.find(
+        (v) =>
+          v.color.toLowerCase() === colorName.toLowerCase() &&
+          v.size.toLowerCase() === sizeName.toLowerCase()
+      );
+      return variant ? variant.stock : 0;
+    }
+    return product.stock ?? 0;
+  };
+
+  // Total product stock across all variants
+  const totalStock =
+    product.variants && product.variants.length > 0
+      ? product.variants.reduce((sum, v) => sum + (v.stock || 0), 0)
+      : (product.stock ?? 0);
+  const isEntireProductSoldOut = totalStock <= 0;
+
+  // Active variant stock for the current selection
+  const activeVariantStock = selectedSize
+    ? getSizeStock(selectedSize, selectedColor)
+    : hasSizes
+    ? 0
+    : totalStock;
+
+  const isSelectionPurchasable =
+    !isEntireProductSoldOut &&
+    (!hasSizes || Boolean(selectedSize)) &&
+    activeVariantStock > 0;
 
   const images = product.images && product.images.length > 0 ? product.images : [product.image];
 
+  const handleColorChange = (newColor: string) => {
+    setSelectedColor(newColor);
+    if (selectedSize) {
+      const newStock = getSizeStock(selectedSize, newColor);
+      if (newStock <= 0) {
+        // Size is not available in the newly selected color: clear size selection
+        setSelectedSize(null);
+        setQuantity(1);
+      } else if (quantity > newStock) {
+        setQuantity(Math.max(1, newStock));
+      }
+    }
+  };
+
+  const handleSizeChange = (newSize: string) => {
+    setSelectedSize(newSize);
+    const sizeStock = getSizeStock(newSize, selectedColor);
+    if (quantity > sizeStock) {
+      setQuantity(Math.max(1, sizeStock));
+    }
+  };
+
   const handleAddToCart = () => {
-    addItem(product, selectedColor, selectedSize, quantity);
+    if (!isSelectionPurchasable) return;
+    const finalSize = selectedSize || (hasSizes ? "" : "Standard");
+    if (!finalSize || !selectedColor) return;
+    if (quantity < 1 || quantity > activeVariantStock) return;
+
+    addItem(product, selectedColor, finalSize, quantity);
     setAddedToCart(true);
     setTimeout(() => setAddedToCart(false), 2000);
   };
 
   const handleBuyNow = () => {
-    addItem(product, selectedColor, selectedSize, quantity);
+    if (!isSelectionPurchasable) return;
+    const finalSize = selectedSize || (hasSizes ? "" : "Standard");
+    if (!finalSize || !selectedColor) return;
+    if (quantity < 1 || quantity > activeVariantStock) return;
+
+    addItem(product, selectedColor, finalSize, quantity);
     router.push("/cart");
   };
 
@@ -124,11 +178,15 @@ export default function ProductDetailView({
             />
 
             {/* Tag Badge */}
-            {product.tag && (
+            {isEntireProductSoldOut ? (
+              <div className="absolute top-4 left-4 bg-neutral-900 text-neutral-300 text-[11px] font-bold tracking-widest px-3 py-1.5 uppercase rounded-[4px]">
+                SOLD OUT
+              </div>
+            ) : product.tag ? (
               <div className="absolute top-4 left-4 bg-black text-white text-[11px] font-bold tracking-widest px-3 py-1.5 uppercase rounded-[4px]">
                 {product.tag}
               </div>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -173,14 +231,15 @@ export default function ProductDetailView({
                       <button
                         key={c.name}
                         type="button"
-                        onClick={() => setSelectedColor(c.name)}
+                        onClick={() => handleColorChange(c.name)}
                         className={`group relative flex items-center justify-center w-8 h-8 rounded-full border transition-all ${
                           isSelected
                             ? "border-black ring-2 ring-black ring-offset-2"
                             : "border-neutral-300 hover:border-black"
                         }`}
                         title={c.name}
-                        aria-label={`Select color ${c.name}`}
+                        aria-label={`Color ${c.name}${isSelected ? ", selected" : ""}`}
+                        aria-pressed={isSelected}
                       >
                         <span
                           className="w-6 h-6 rounded-full border border-neutral-200"
@@ -194,11 +253,18 @@ export default function ProductDetailView({
             )}
 
             {/* Size Selector */}
-            {product.sizes && product.sizes.length > 0 && (
+            {hasSizes && (
               <div>
                 <div className="flex justify-between items-center mb-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-black">
-                    SIZE: <span className="font-medium text-neutral-600">{selectedSize}</span>
+                    SIZE:{" "}
+                    <span
+                      className={`font-medium ${
+                        selectedSize ? "text-neutral-600" : "text-neutral-400"
+                      }`}
+                    >
+                      {selectedSize ? selectedSize : "SELECT A SIZE"}
+                    </span>
                   </span>
                   <button
                     type="button"
@@ -210,15 +276,27 @@ export default function ProductDetailView({
                 </div>
                 <div className="grid grid-cols-4 gap-2">
                   {product.sizes.map((s) => {
+                    const sizeStock = getSizeStock(s, selectedColor);
+                    const isAvailable = sizeStock > 0;
                     const isSelected = selectedSize === s;
+
                     return (
                       <button
                         key={s}
                         type="button"
-                        onClick={() => setSelectedSize(s)}
-                        className={`py-3 text-xs font-bold uppercase tracking-wider rounded-[8px] transition-colors ${
-                          isSelected
-                            ? "bg-black text-white"
+                        disabled={!isAvailable}
+                        onClick={() => handleSizeChange(s)}
+                        aria-pressed={isSelected}
+                        aria-label={
+                          isAvailable
+                            ? `Size ${s}${isSelected ? ", selected" : ""}`
+                            : `Size ${s}, out of stock`
+                        }
+                        className={`py-3 text-xs font-bold uppercase tracking-wider rounded-[8px] transition-all ${
+                          !isAvailable
+                            ? "bg-neutral-100 text-neutral-400 border border-dashed border-neutral-300 cursor-not-allowed line-through select-none"
+                            : isSelected
+                            ? "bg-black text-white border border-black shadow-sm"
                             : "bg-white text-black border border-neutral-200 hover:border-black"
                         }`}
                       >
@@ -237,13 +315,17 @@ export default function ProductDetailView({
                   QUANTITY
                 </span>
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
-                  {isAvailable ? (
+                  {isEntireProductSoldOut ? (
+                    <span className="text-neutral-400 font-semibold">Sold Out</span>
+                  ) : hasSizes && !selectedSize ? (
+                    <span className="text-neutral-400">Select size for stock info</span>
+                  ) : activeVariantStock > 0 ? (
                     <span className="inline-flex items-center gap-1.5 text-neutral-800">
                       <span className="w-1.5 h-1.5 rounded-full bg-black inline-block" />
-                      In Stock: {currentStock} units available
+                      In Stock: {activeVariantStock} {activeVariantStock === 1 ? "unit" : "units"} available
                     </span>
                   ) : (
-                    <span className="text-neutral-400">Sold Out</span>
+                    <span className="text-neutral-400 font-semibold">Sold Out</span>
                   )}
                 </span>
               </div>
@@ -253,19 +335,19 @@ export default function ProductDetailView({
                   <button
                     type="button"
                     onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                    disabled={quantity <= 1 || !isAvailable}
+                    disabled={quantity <= 1 || !isSelectionPurchasable}
                     className="px-3.5 py-2.5 text-sm font-bold text-black hover:bg-neutral-100 disabled:opacity-30 disabled:hover:bg-transparent rounded-l-[8px]"
                     aria-label="Decrease quantity"
                   >
                     &minus;
                   </button>
                   <span className="w-10 text-center text-xs font-bold text-black">
-                    {isAvailable ? quantity : 0}
+                    {isSelectionPurchasable ? quantity : selectedSize ? 0 : 1}
                   </span>
                   <button
                     type="button"
-                    onClick={() => setQuantity((q) => Math.min(currentStock, q + 1))}
-                    disabled={quantity >= currentStock || !isAvailable}
+                    onClick={() => setQuantity((q) => Math.min(activeVariantStock, q + 1))}
+                    disabled={quantity >= activeVariantStock || !isSelectionPurchasable}
                     className="px-3.5 py-2.5 text-sm font-bold text-black hover:bg-neutral-100 disabled:opacity-30 disabled:hover:bg-transparent rounded-r-[8px]"
                     aria-label="Increase quantity"
                   >
@@ -280,22 +362,30 @@ export default function ProductDetailView({
               <button
                 type="button"
                 onClick={handleAddToCart}
-                disabled={!isAvailable}
+                disabled={!isSelectionPurchasable}
                 className={`w-full py-4 rounded-[8px] font-bold text-xs uppercase tracking-widest transition-all ${
-                  !isAvailable
+                  !isSelectionPurchasable
                     ? "bg-neutral-200 text-neutral-400 cursor-not-allowed"
                     : addedToCart
                     ? "bg-neutral-800 text-white"
                     : "bg-black text-white hover:bg-neutral-800"
                 }`}
               >
-                {!isAvailable ? "OUT OF STOCK" : addedToCart ? "ADDED TO CART \u2713" : "ADD TO CART"}
+                {isEntireProductSoldOut
+                  ? "OUT OF STOCK"
+                  : hasSizes && !selectedSize
+                  ? "SELECT A SIZE"
+                  : activeVariantStock <= 0
+                  ? "OUT OF STOCK"
+                  : addedToCart
+                  ? "ADDED TO CART \u2713"
+                  : "ADD TO CART"}
               </button>
 
               <button
                 type="button"
                 onClick={handleBuyNow}
-                disabled={!isAvailable}
+                disabled={!isSelectionPurchasable}
                 className="w-full py-4 rounded-[8px] font-bold text-xs uppercase tracking-widest bg-white text-black border border-black hover:bg-neutral-100 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white transition-colors"
               >
                 BUY NOW

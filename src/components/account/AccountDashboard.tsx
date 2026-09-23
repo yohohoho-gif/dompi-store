@@ -4,13 +4,22 @@ import { useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { CustomerUser } from "@/lib/auth";
+import { CustomerProfile, CustomerAddress } from "@/lib/profile";
 import { customerLogoutAction } from "@/app/actions/auth";
+import ProfileEditor from "@/components/account/ProfileEditor";
+import AddressBook from "@/components/account/AddressBook";
 
 interface AccountDashboardProps {
   customer: CustomerUser;
+  profile: CustomerProfile | null;
+  addresses: CustomerAddress[];
 }
 
-export default function AccountDashboard({ customer }: AccountDashboardProps) {
+export default function AccountDashboard({
+  customer,
+  profile,
+  addresses,
+}: AccountDashboardProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
@@ -24,11 +33,17 @@ export default function AccountDashboard({ customer }: AccountDashboardProps) {
     });
   };
 
-  const formattedDate = new Date(customer.createdAt).toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  const formattedDate = new Date(customer.createdAt).toLocaleDateString(
+    "en-US",
+    {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    }
+  );
+
+  // Source of truth for editable name is customer_profiles; fallback to Auth metadata if null
+  const displayName = profile?.fullName || customer.fullName || "Archive Member";
 
   return (
     <div className="space-y-8">
@@ -39,7 +54,7 @@ export default function AccountDashboard({ customer }: AccountDashboardProps) {
             DOMPI ARCHIVE MEMBER
           </span>
           <h1 className="text-2xl sm:text-3xl font-black uppercase tracking-tight text-black">
-            {customer.fullName}
+            {displayName}
           </h1>
           <p className="text-xs text-neutral-500 font-mono mt-0.5">
             {customer.email}
@@ -50,7 +65,7 @@ export default function AccountDashboard({ customer }: AccountDashboardProps) {
           type="button"
           disabled={isPending}
           onClick={handleSignOut}
-          className="px-5 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-800 text-xs font-bold uppercase tracking-wider rounded-[6px] transition-colors disabled:opacity-50 self-start sm:self-auto"
+          className="px-5 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-800 text-xs font-bold uppercase tracking-wider rounded-[8px] transition-colors disabled:opacity-50 self-start sm:self-auto cursor-pointer"
         >
           {isPending ? "Signing Out..." : "Sign Out"}
         </button>
@@ -98,6 +113,16 @@ export default function AccountDashboard({ customer }: AccountDashboardProps) {
         </div>
       </div>
 
+      {/* Profile Section (Source of truth: public.customer_profiles) */}
+      <ProfileEditor
+        email={customer.email}
+        initialFullName={profile?.fullName || null}
+        initialPhone={profile?.phone || null}
+      />
+
+      {/* Address Book Section (Source of truth: public.customer_addresses) */}
+      <AddressBook addresses={addresses} />
+
       {/* Quick Navigation Tiles */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Link
@@ -139,16 +164,6 @@ export default function AccountDashboard({ customer }: AccountDashboardProps) {
             &rarr;
           </span>
         </Link>
-      </div>
-
-      {/* Phase 2 Roadmap Notice */}
-      <div className="bg-neutral-50 border border-dashed border-neutral-300 rounded-[10px] p-6 text-center text-xs text-neutral-500 space-y-1">
-        <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 block">
-          Upcoming Account Capabilities
-        </span>
-        <p className="max-w-md mx-auto text-neutral-600">
-          Order history tracking, personal address book, and one-click repeat ordering will be enabled in Phase 2.
-        </p>
       </div>
     </div>
   );

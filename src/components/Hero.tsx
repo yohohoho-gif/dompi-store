@@ -37,7 +37,7 @@ export default function Hero() {
 
             <div className="pt-3 sm:pt-5">
               <Link
-                href="#shop"
+                href="/shop"
                 className="inline-flex items-center justify-center px-8 py-3.5 bg-white text-black font-bold text-xs uppercase tracking-widest rounded-[8px] hover:bg-neutral-200 transition-colors"
               >
                 SHOP NOW

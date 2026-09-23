@@ -1,30 +1,12 @@
-"use client";
-
-import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { NEW_ARRIVALS, Product } from "@/data/products";
-import { useCart } from "@/context/CartContext";
+import { ProductWithVariants } from "@/lib/catalog";
 
-export default function NewArrivals() {
-  const { addItem } = useCart();
-  const [addedId, setAddedId] = useState<string | null>(null);
+interface NewArrivalsProps {
+  products: ProductWithVariants[];
+}
 
-  const handleAddToCart = (e: React.MouseEvent, product: Product) => {
-    e.preventDefault();
-    e.stopPropagation();
-    addItem(
-      product,
-      product.colors?.[0]?.name || "Standard",
-      product.sizes?.[0] || "M",
-      1
-    );
-    setAddedId(product.id);
-    setTimeout(() => {
-      setAddedId((current) => (current === product.id ? null : current));
-    }, 1500);
-  };
-
+export default function NewArrivals({ products }: NewArrivalsProps) {
   return (
     <section id="new-arrivals" className="w-full py-16 sm:py-20 bg-white border-b border-neutral-200">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -47,67 +29,88 @@ export default function NewArrivals() {
           </Link>
         </div>
 
-        {/* 4 Products Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 sm:gap-8">
-          {NEW_ARRIVALS.map((product) => (
-            <div
-              key={product.id}
-              className="group flex flex-col bg-white border border-neutral-200 rounded-[8px] overflow-hidden"
-            >
-              {/* Product Image Container */}
-              <Link
-                href={`/shop/${product.slug}`}
-                className="relative aspect-[3/4] w-full bg-neutral-100 overflow-hidden block"
-              >
-                <Image
-                  src={product.image}
-                  alt={product.name}
-                  fill
-                  sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
-                  className="object-cover object-center group-hover:scale-105 transition-transform duration-500 grayscale contrast-105"
-                />
+        {/* Products Grid or Empty Fallback */}
+        {products.length === 0 ? (
+          <div className="py-16 text-center border border-dashed border-neutral-200 rounded-[8px]">
+            <p className="text-xs font-bold uppercase tracking-wider text-neutral-400">
+              No new arrivals currently available
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 sm:gap-8">
+            {products.map((product) => {
+              const variants = product.variants;
+              const isSoldOut =
+                variants && variants.length > 0
+                  ? variants.every((v) => (v.stock || 0) <= 0)
+                  : (product.stock ?? 0) <= 0;
 
-                {/* Optional Tag */}
-                {product.tag && (
-                  <div className="absolute top-3 left-3 bg-black text-white text-[10px] font-bold tracking-widest px-2.5 py-1 uppercase rounded-[4px]">
-                    {product.tag}
-                  </div>
-                )}
-              </Link>
-
-              {/* Product Information */}
-              <div className="p-4 flex flex-col flex-1 justify-between gap-3 bg-white">
-                <div>
-                  <span className="text-[10px] font-medium tracking-wider text-neutral-400 uppercase">
-                    {product.category}
-                  </span>
-                  <Link href={`/shop/${product.slug}`} className="block">
-                    <h3 className="text-xs font-bold tracking-tight text-black uppercase mt-0.5 group-hover:text-neutral-600 transition-colors line-clamp-1">
-                      {product.name}
-                    </h3>
-                  </Link>
-                </div>
-
-                <div className="flex items-center justify-between pt-2 border-t border-neutral-100">
-                  <span className="text-sm font-black tracking-tight text-black">
-                    {product.currency} {product.price.toLocaleString()}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={(e) => handleAddToCart(e, product)}
-                    className={`text-[11px] font-bold tracking-wider uppercase transition-colors ${
-                      addedId === product.id
-                        ? "text-green-700 font-extrabold"
-                        : "text-black hover:text-neutral-500 underline underline-offset-4"
-                    }`}
+              return (
+                <div
+                  key={product.id}
+                  className="group flex flex-col bg-white border border-neutral-200 rounded-[8px] overflow-hidden"
+                >
+                  {/* Product Image Container */}
+                  <Link
+                    href={`/shop/${product.slug}`}
+                    className="relative aspect-[3/4] w-full bg-neutral-100 overflow-hidden block"
                   >
-                    {addedId === product.id ? "ADDED ✓" : "ADD TO CART"}
-                  </button>
+                    <Image
+                      src={product.image}
+                      alt={product.name}
+                      fill
+                      sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
+                      className="object-cover object-center group-hover:scale-105 transition-transform duration-500 grayscale contrast-105"
+                    />
+
+                    {/* Badge Tag */}
+                    {isSoldOut ? (
+                      <div className="absolute top-3 left-3 bg-neutral-900 text-neutral-300 text-[10px] font-bold tracking-widest px-2.5 py-1 uppercase rounded-[4px]">
+                        SOLD OUT
+                      </div>
+                    ) : product.tag ? (
+                      <div className="absolute top-3 left-3 bg-black text-white text-[10px] font-bold tracking-widest px-2.5 py-1 uppercase rounded-[4px]">
+                        {product.tag}
+                      </div>
+                    ) : null}
+                  </Link>
+
+                  {/* Product Information */}
+                  <div className="p-4 flex flex-col flex-1 justify-between gap-3 bg-white">
+                    <div>
+                      <span className="text-[10px] font-medium tracking-wider text-neutral-400 uppercase">
+                        {product.category}
+                      </span>
+                      <Link href={`/shop/${product.slug}`} className="block">
+                        <h3 className="text-xs font-bold tracking-tight text-black uppercase mt-0.5 group-hover:text-neutral-600 transition-colors line-clamp-1">
+                          {product.name}
+                        </h3>
+                      </Link>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-neutral-100">
+                      <span className="text-sm font-black tracking-tight text-black">
+                        {product.currency} {product.price.toLocaleString()}
+                      </span>
+                      {isSoldOut ? (
+                        <span className="text-[11px] font-bold tracking-wider uppercase text-neutral-400 select-none">
+                          SOLD OUT
+                        </span>
+                      ) : (
+                        <Link
+                          href={`/shop/${product.slug}`}
+                          className="text-[11px] font-bold tracking-wider uppercase text-black hover:text-neutral-500 underline underline-offset-4"
+                        >
+                          SELECT OPTIONS
+                        </Link>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          ))}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </section>
   );

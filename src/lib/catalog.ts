@@ -24,8 +24,15 @@ export interface ProductVariant {
   stock: number;
 }
 
+export interface CatalogCategory {
+  id: string;
+  name: string;
+  slug: string;
+}
+
 export interface ProductWithVariants extends Product {
   variants?: ProductVariant[];
+  categorySlug?: string;
 }
 
 const COLOR_HEX_MAP: Record<string, string> = {
@@ -156,6 +163,7 @@ function transformRawProduct(raw: RawProduct): ProductWithVariants {
     slug: raw.slug,
     name: raw.name,
     category: raw.category?.name || "General",
+    categorySlug: raw.category?.slug || "",
     price: Number(raw.price),
     currency: "THB",
     image: primaryImage,
@@ -180,7 +188,7 @@ function transformRawProduct(raw: RawProduct): ProductWithVariants {
  */
 export async function getSupabaseCatalog(): Promise<{
   products: ProductWithVariants[];
-  categories: string[];
+  categories: CatalogCategory[];
 }> {
   try {
     const supabase = getCatalogClient();
@@ -195,10 +203,7 @@ export async function getSupabaseCatalog(): Promise<{
       console.error("Supabase error fetching categories:", catError.message);
     }
 
-    const categories = [
-      "ALL",
-      ...(catData || []).map((c) => c.name.toUpperCase().replace(/\s+/g, "-")),
-    ];
+    const categories: CatalogCategory[] = catData || [];
 
     // 2. Fetch active products with joined categories, images, and variants
     const { data: prodData, error: prodError } = await supabase
@@ -220,18 +225,18 @@ export async function getSupabaseCatalog(): Promise<{
 
     if (prodError) {
       console.error("Supabase error fetching products:", prodError.message);
-      return { products: [], categories: ["ALL"] };
+      return { products: [], categories: [] };
     }
 
     const products = (prodData as unknown as RawProduct[]).map(transformRawProduct);
 
     return {
       products,
-      categories: categories.length > 1 ? categories : ["ALL", "T-SHIRTS", "HOODIES", "PANTS", "ACCESSORIES"],
+      categories,
     };
   } catch (err) {
     console.error("Catalog fetch error:", err);
-    return { products: [], categories: ["ALL"] };
+    return { products: [], categories: [] };
   }
 }
 
