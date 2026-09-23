@@ -1,12 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { useCart, CartItem } from "@/context/CartContext";
+import ThailandAddressSelector from "@/components/common/ThailandAddressSelector";
+import {
+  placeOrderAction,
+  PlaceOrderInput,
+  CheckoutPaymentMethod,
+} from "@/app/actions/checkout";
+import { createClient } from "@/lib/supabase/client";
 
 interface ShippingFormData {
   firstName: string;
@@ -19,8 +26,6 @@ interface ShippingFormData {
   subdistrict: string;
   postalCode: string;
 }
-
-type PaymentMethod = "cod" | "transfer" | "card";
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -38,43 +43,162 @@ export default function CheckoutPage() {
     postalCode: "",
   });
 
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cod");
+  const [paymentMethod, setPaymentMethod] = useState<CheckoutPaymentMethod>("bank_transfer");
   const [errors, setErrors] = useState<Partial<Record<keyof ShippingFormData, string>>>({});
+  const [serverError, setServerError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [authEmail, setAuthEmail] = useState<string | null>(null);
+
+  // Preserve ONE idempotency UUID per checkout session without regenerating on re-render
+  const idempotencyKeyRef = useRef<string>("");
+
+  useEffect(() => {
+    if (!idempotencyKeyRef.current) {
+      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        idempotencyKeyRef.current = crypto.randomUUID();
+      } else {
+        // Fallback standard UUID v4
+        idempotencyKeyRef.current = "10000000-1000-4000-8000-100000000000".replace(
+          /[018]/g,
+          (c) =>
+            (
+              +c ^
+              (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (+c / 4)))
+            ).toString(16)
+        );
+      }
+    }
+  }, []);
+
+  // Autofill if authenticated customer exists
+  useEffect(() => {
+    let ignore = false;
+    async function loadCustomerDefaults() {
+      try {
+        const supabase = createClient();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (user && !ignore) {
+          setAuthEmail(user.email ?? null);
+          setFormData((prev) => ({
+            ...prev,
+            email: prev.email || user.email || "",
+          }));
+
+          // Fetch profile and default address for convenient customer autofill
+          const { data: profile } = await supabase
+            .from("customer_profiles")
+            .select("full_name, phone")
+            .eq("id", user.id)
+            .maybeSingle();
+
+          if (profile && !ignore) {
+            const parts = (profile.full_name || "").trim().split(/\s+/);
+            const firstName = parts[0] || "";
+            const lastName = parts.slice(1).join(" ") || "";
+
+            setFormData((prev) => ({
+              ...prev,
+              firstName: prev.firstName || firstName,
+              lastName: prev.lastName || lastName,
+              phone: prev.phone || profile.phone || "",
+            }));
+          }
+
+          const { data: defaultAddr } = await supabase
+            .from("customer_addresses")
+            .select("recipient_name, phone, address_line, subdistrict, district, province, postal_code")
+            .eq("user_id", user.id)
+            .order("is_default", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (defaultAddr && !ignore) {
+            const addrParts = (defaultAddr.recipient_name || "").trim().split(/\s+/);
+            setFormData((prev) => ({
+              ...prev,
+              firstName: prev.firstName || addrParts[0] || "",
+              lastName: prev.lastName || addrParts.slice(1).join(" ") || "",
+              phone: prev.phone || defaultAddr.phone || "",
+              address: prev.address || defaultAddr.address_line || "",
+              subdistrict: prev.subdistrict || defaultAddr.subdistrict || "",
+              district: prev.district || defaultAddr.district || "",
+              province: prev.province || defaultAddr.province || "",
+              postalCode: prev.postalCode || defaultAddr.postal_code || "",
+            }));
+          }
+        }
+      } catch (err) {
+        console.error("Autofill check error:", err);
+      }
+    }
+
+    loadCustomerDefaults();
+    return () => {
+      ignore = true;
+    };
+  }, []);
 
   const handleInputChange = (field: keyof ShippingFormData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
     if (errors[field]) {
       setErrors((prev) => ({ ...prev, [field]: undefined }));
     }
+    if (serverError) {
+      setServerError(null);
+    }
   };
 
   const validateForm = (): boolean => {
     const newErrors: Partial<Record<keyof ShippingFormData, string>> = {};
 
-    if (!formData.firstName.trim()) newErrors.firstName = "First name is required";
-    if (!formData.lastName.trim()) newErrors.lastName = "Last name is required";
+    if (!formData.firstName.trim()) {
+      newErrors.firstName = "First name is required";
+    }
 
-    if (!formData.phone.trim()) {
+    if (!formData.lastName.trim()) {
+      newErrors.lastName = "Last name is required";
+    }
+
+    const trimmedPhone = formData.phone.trim();
+    if (!trimmedPhone) {
       newErrors.phone = "Phone number is required";
-    } else if (!/^[0-9+() -]{9,15}$/.test(formData.phone.trim())) {
+    } else if (!/^[0-9+() -]{9,20}$/.test(trimmedPhone)) {
       newErrors.phone = "Please enter a valid phone number (e.g. 0812345678)";
     }
 
-    if (!formData.email.trim()) {
+    const trimmedEmail = formData.email.trim();
+    if (!trimmedEmail) {
       newErrors.email = "Email is required";
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
       newErrors.email = "Please enter a valid email address";
     }
 
-    if (!formData.address.trim()) newErrors.address = "Street address is required";
-    if (!formData.subdistrict.trim()) newErrors.subdistrict = "Subdistrict is required";
-    if (!formData.district.trim()) newErrors.district = "District is required";
-    if (!formData.province.trim()) newErrors.province = "Province is required";
+    const trimmedAddress = formData.address.trim();
+    if (!trimmedAddress) {
+      newErrors.address = "Street address is required";
+    } else if (trimmedAddress.length < 5) {
+      newErrors.address = "Street address must be at least 5 characters";
+    }
 
-    if (!formData.postalCode.trim()) {
+    if (!formData.province.trim()) {
+      newErrors.province = "Province is required";
+    }
+
+    if (!formData.district.trim()) {
+      newErrors.district = "District is required";
+    }
+
+    if (!formData.subdistrict.trim()) {
+      newErrors.subdistrict = "Subdistrict is required";
+    }
+
+    const trimmedPostal = formData.postalCode.trim();
+    if (!trimmedPostal) {
       newErrors.postalCode = "Postal code is required";
-    } else if (!/^\d{5}$/.test(formData.postalCode.trim())) {
+    } else if (!/^\d{5}$/.test(trimmedPostal)) {
       newErrors.postalCode = "Please enter a valid 5-digit postal code";
     }
 
@@ -82,47 +206,113 @@ export default function CheckoutPage() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handlePlaceOrder = (e: React.FormEvent) => {
+  const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Prevent accidental double-submit while request is pending
+    if (isProcessing) return;
 
     if (items.length === 0) return;
 
     if (!validateForm()) {
       const firstErrorKey = Object.keys(errors)[0];
-      const el = document.getElementById(firstErrorKey);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (firstErrorKey) {
+        const el = document.getElementById(firstErrorKey);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
       return;
     }
 
     setIsProcessing(true);
+    setServerError(null);
 
-    // Generate mock order number
-    const randomDigits = Math.floor(100000 + Math.random() * 900000);
-    const mockOrderNumber = `DMP-${randomDigits}`;
-
-    const orderReceipt = {
-      orderNumber: mockOrderNumber,
-      date: new Date().toISOString(),
-      items: [...items],
-      shippingAddress: { ...formData },
-      paymentMethod,
-      subtotal,
-      shipping,
-      total,
-    };
-
-    // Store in sessionStorage for /order-success page
-    try {
-      sessionStorage.setItem("dompi_last_order", JSON.stringify(orderReceipt));
-    } catch (err) {
-      console.error("Failed to store order in sessionStorage", err);
+    // Ensure idempotency key exists
+    if (!idempotencyKeyRef.current) {
+      idempotencyKeyRef.current =
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
+              (
+                +c ^
+                (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (+c / 4)))
+              ).toString(16)
+            );
     }
 
-    // Simulate order placement delay, clear cart and redirect
-    setTimeout(() => {
+    const recipientFullName = `${formData.firstName.trim()} ${formData.lastName.trim()}`;
+
+    const orderPayload: PlaceOrderInput = {
+      items: items.map((item) => ({
+        variantId: item.variantId,
+        productId: item.product.id,
+        color: item.color,
+        size: item.size,
+        quantity: item.quantity,
+      })),
+      contact: {
+        name: recipientFullName,
+        email: formData.email.trim(),
+        phone: formData.phone.trim(),
+      },
+      shippingAddress: {
+        recipientName: recipientFullName,
+        phone: formData.phone.trim(),
+        addressLine: formData.address.trim(),
+        subdistrict: formData.subdistrict.trim(),
+        district: formData.district.trim(),
+        province: formData.province.trim(),
+        postalCode: formData.postalCode.trim(),
+        country: "TH",
+      },
+      paymentMethod,
+      idempotencyKey: idempotencyKeyRef.current,
+    };
+
+    try {
+      const result = await placeOrderAction(orderPayload);
+
+      if (!result.success || !result.data) {
+        // Handle failure: preserve cart, show friendly user error
+        setServerError(
+          result.error ||
+            "Unable to place your order at this time. Please check your details and try again."
+        );
+        setIsProcessing(false);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+
+      // Successful order creation: store authoritative receipt info
+      const receipt = {
+        orderNumber: result.data.order_number,
+        orderId: result.data.order_id,
+        subtotal: result.data.subtotal,
+        shippingFee: result.data.shipping_fee,
+        total: result.data.total,
+        currency: result.data.currency,
+        paymentMethod,
+        items: [...items],
+        shippingAddress: { ...formData },
+        createdAt: new Date().toISOString(),
+      };
+
+      try {
+        sessionStorage.setItem("dompi_last_order", JSON.stringify(receipt));
+      } catch (err) {
+        console.error("Failed to store receipt in sessionStorage", err);
+      }
+
+      // Clear the cart ONLY after successful order creation
       clearCart();
-      router.push(`/order-success?orderId=${mockOrderNumber}`);
-    }, 1200);
+
+      // Navigate to /order-success with authoritative order number
+      router.push(`/order-success?orderNumber=${encodeURIComponent(result.data.order_number)}`);
+    } catch (err) {
+      console.error("Checkout execution error:", err);
+      setServerError("A network error occurred while submitting your order. Please try again.");
+      setIsProcessing(false);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
   };
 
   if (!isHydrated) {
@@ -157,13 +347,57 @@ export default function CheckoutPage() {
 
         {/* Page Header */}
         <header className="mb-10 pb-6 border-b border-neutral-200">
-          <span className="text-[11px] font-bold tracking-[0.25em] text-neutral-400 uppercase block mb-1">
-            FINAL DISPATCH
-          </span>
-          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tighter text-black uppercase">
-            CHECKOUT
-          </h1>
+          <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-2">
+            <div>
+              <span className="text-[11px] font-bold tracking-[0.25em] text-neutral-400 uppercase block mb-1">
+                SECURE DISPATCH
+              </span>
+              <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tighter text-black uppercase">
+                CHECKOUT
+              </h1>
+            </div>
+            {authEmail && (
+              <span className="text-xs text-neutral-500 font-medium">
+                Ordering as <strong className="text-black">{authEmail}</strong>
+              </span>
+            )}
+          </div>
         </header>
+
+        {/* Global Error Banner */}
+        {serverError && (
+          <div
+            role="alert"
+            className="mb-8 p-4 bg-red-50 border border-red-200 rounded-[8px] flex items-start gap-3 text-red-900"
+          >
+            <svg
+              className="w-5 h-5 text-red-600 shrink-0 mt-0.5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+              />
+            </svg>
+            <div className="flex-1 text-xs">
+              <strong className="font-bold block uppercase tracking-wide mb-0.5">
+                Order Placement Notice
+              </strong>
+              <p className="leading-relaxed">{serverError}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setServerError(null)}
+              className="text-red-500 hover:text-red-800 text-xs font-bold uppercase tracking-wider ml-auto"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
 
         {/* Cart Protection: Empty State */}
         {items.length === 0 && !isProcessing ? (
@@ -184,13 +418,13 @@ export default function CheckoutPage() {
         ) : (
           <form onSubmit={handlePlaceOrder} noValidate>
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-start">
-              {/* Left Column (7 cols): Shipping Form & Payment */}
+              {/* Left Column (7 cols): Contact, Shipping & Payment */}
               <div className="lg:col-span-7 space-y-10">
-                {/* 1. Contact & Shipping Information */}
+                {/* 1. Contact Details */}
                 <section className="space-y-6">
                   <div className="flex items-center justify-between pb-3 border-b border-neutral-200">
                     <h2 className="text-sm font-black uppercase tracking-wider text-black">
-                      1. SHIPPING DESTINATION
+                      1. CONTACT & RECIPIENT
                     </h2>
                     <span className="text-[11px] text-neutral-400 font-medium">
                       * All fields required
@@ -210,15 +444,20 @@ export default function CheckoutPage() {
                         <input
                           id="firstName"
                           type="text"
+                          disabled={isProcessing}
                           value={formData.firstName}
                           onChange={(e) => handleInputChange("firstName", e.target.value)}
                           placeholder="e.g. Alex"
-                          className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none ${
-                            errors.firstName ? "border-red-600 ring-1 ring-red-600" : "border-neutral-300 focus:border-black"
+                          className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none disabled:bg-neutral-100 ${
+                            errors.firstName
+                              ? "border-red-600 ring-1 ring-red-600"
+                              : "border-neutral-300 focus:border-black"
                           }`}
                         />
                         {errors.firstName && (
-                          <p className="mt-1 text-[11px] text-red-600 font-medium">{errors.firstName}</p>
+                          <p className="mt-1 text-[11px] text-red-600 font-medium">
+                            {errors.firstName}
+                          </p>
                         )}
                       </div>
 
@@ -232,15 +471,20 @@ export default function CheckoutPage() {
                         <input
                           id="lastName"
                           type="text"
+                          disabled={isProcessing}
                           value={formData.lastName}
                           onChange={(e) => handleInputChange("lastName", e.target.value)}
                           placeholder="e.g. Chen"
-                          className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none ${
-                            errors.lastName ? "border-red-600 ring-1 ring-red-600" : "border-neutral-300 focus:border-black"
+                          className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none disabled:bg-neutral-100 ${
+                            errors.lastName
+                              ? "border-red-600 ring-1 ring-red-600"
+                              : "border-neutral-300 focus:border-black"
                           }`}
                         />
                         {errors.lastName && (
-                          <p className="mt-1 text-[11px] text-red-600 font-medium">{errors.lastName}</p>
+                          <p className="mt-1 text-[11px] text-red-600 font-medium">
+                            {errors.lastName}
+                          </p>
                         )}
                       </div>
                     </div>
@@ -257,15 +501,20 @@ export default function CheckoutPage() {
                         <input
                           id="phone"
                           type="tel"
+                          disabled={isProcessing}
                           value={formData.phone}
                           onChange={(e) => handleInputChange("phone", e.target.value)}
                           placeholder="e.g. 0812345678"
-                          className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none ${
-                            errors.phone ? "border-red-600 ring-1 ring-red-600" : "border-neutral-300 focus:border-black"
+                          className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none disabled:bg-neutral-100 ${
+                            errors.phone
+                              ? "border-red-600 ring-1 ring-red-600"
+                              : "border-neutral-300 focus:border-black"
                           }`}
                         />
                         {errors.phone && (
-                          <p className="mt-1 text-[11px] text-red-600 font-medium">{errors.phone}</p>
+                          <p className="mt-1 text-[11px] text-red-600 font-medium">
+                            {errors.phone}
+                          </p>
                         )}
                       </div>
 
@@ -279,19 +528,38 @@ export default function CheckoutPage() {
                         <input
                           id="email"
                           type="email"
+                          disabled={isProcessing}
                           value={formData.email}
                           onChange={(e) => handleInputChange("email", e.target.value)}
                           placeholder="e.g. alex@example.com"
-                          className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none ${
-                            errors.email ? "border-red-600 ring-1 ring-red-600" : "border-neutral-300 focus:border-black"
+                          className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none disabled:bg-neutral-100 ${
+                            errors.email
+                              ? "border-red-600 ring-1 ring-red-600"
+                              : "border-neutral-300 focus:border-black"
                           }`}
                         />
                         {errors.email && (
-                          <p className="mt-1 text-[11px] text-red-600 font-medium">{errors.email}</p>
+                          <p className="mt-1 text-[11px] text-red-600 font-medium">
+                            {errors.email}
+                          </p>
                         )}
                       </div>
                     </div>
+                  </div>
+                </section>
 
+                {/* 2. Thailand Shipping Destination */}
+                <section className="space-y-6 pt-4 border-t border-neutral-200">
+                  <div className="flex items-center justify-between pb-3 border-b border-neutral-200">
+                    <h2 className="text-sm font-black uppercase tracking-wider text-black">
+                      2. THAILAND SHIPPING DESTINATION
+                    </h2>
+                    <span className="text-[11px] text-neutral-400 font-medium">
+                      Country: Thailand (TH)
+                    </span>
+                  </div>
+
+                  <div className="space-y-4">
                     {/* Street Address */}
                     <div>
                       <label
@@ -303,161 +571,77 @@ export default function CheckoutPage() {
                       <input
                         id="address"
                         type="text"
+                        disabled={isProcessing}
                         value={formData.address}
                         onChange={(e) => handleInputChange("address", e.target.value)}
                         placeholder="House no., street, soi, building..."
-                        className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none ${
-                          errors.address ? "border-red-600 ring-1 ring-red-600" : "border-neutral-300 focus:border-black"
+                        className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none disabled:bg-neutral-100 ${
+                          errors.address
+                            ? "border-red-600 ring-1 ring-red-600"
+                            : "border-neutral-300 focus:border-black"
                         }`}
                       />
                       {errors.address && (
-                        <p className="mt-1 text-[11px] text-red-600 font-medium">{errors.address}</p>
+                        <p className="mt-1 text-[11px] text-red-600 font-medium">
+                          {errors.address}
+                        </p>
                       )}
                     </div>
 
-                    {/* Geographic Fields: Subdistrict, District */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label
-                          htmlFor="subdistrict"
-                          className="block text-xs font-bold uppercase tracking-wider text-black mb-1.5"
-                        >
-                          Subdistrict (Tambon/Khwaeng)
-                        </label>
-                        <input
-                          id="subdistrict"
-                          type="text"
-                          value={formData.subdistrict}
-                          onChange={(e) => handleInputChange("subdistrict", e.target.value)}
-                          placeholder="e.g. Khlong Tan Nuea"
-                          className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none ${
-                            errors.subdistrict ? "border-red-600 ring-1 ring-red-600" : "border-neutral-300 focus:border-black"
-                          }`}
-                        />
-                        {errors.subdistrict && (
-                          <p className="mt-1 text-[11px] text-red-600 font-medium">{errors.subdistrict}</p>
-                        )}
-                      </div>
-
-                      <div>
-                        <label
-                          htmlFor="district"
-                          className="block text-xs font-bold uppercase tracking-wider text-black mb-1.5"
-                        >
-                          District (Amphoe/Khet)
-                        </label>
-                        <input
-                          id="district"
-                          type="text"
-                          value={formData.district}
-                          onChange={(e) => handleInputChange("district", e.target.value)}
-                          placeholder="e.g. Watthana"
-                          className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none ${
-                            errors.district ? "border-red-600 ring-1 ring-red-600" : "border-neutral-300 focus:border-black"
-                          }`}
-                        />
-                        {errors.district && (
-                          <p className="mt-1 text-[11px] text-red-600 font-medium">{errors.district}</p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Province & Postal Code */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label
-                          htmlFor="province"
-                          className="block text-xs font-bold uppercase tracking-wider text-black mb-1.5"
-                        >
-                          Province
-                        </label>
-                        <input
-                          id="province"
-                          type="text"
-                          value={formData.province}
-                          onChange={(e) => handleInputChange("province", e.target.value)}
-                          placeholder="e.g. Bangkok"
-                          className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none ${
-                            errors.province ? "border-red-600 ring-1 ring-red-600" : "border-neutral-300 focus:border-black"
-                          }`}
-                        />
-                        {errors.province && (
-                          <p className="mt-1 text-[11px] text-red-600 font-medium">{errors.province}</p>
-                        )}
-                      </div>
-
-                      <div>
-                        <label
-                          htmlFor="postalCode"
-                          className="block text-xs font-bold uppercase tracking-wider text-black mb-1.5"
-                        >
-                          Postal Code
-                        </label>
-                        <input
-                          id="postalCode"
-                          type="text"
-                          value={formData.postalCode}
-                          onChange={(e) => handleInputChange("postalCode", e.target.value)}
-                          placeholder="e.g. 10110"
-                          maxLength={5}
-                          className={`w-full bg-white border rounded-[8px] px-3.5 py-3 text-xs text-black placeholder-neutral-400 focus:outline-none ${
-                            errors.postalCode ? "border-red-600 ring-1 ring-red-600" : "border-neutral-300 focus:border-black"
-                          }`}
-                        />
-                        {errors.postalCode && (
-                          <p className="mt-1 text-[11px] text-red-600 font-medium">{errors.postalCode}</p>
-                        )}
-                      </div>
+                    {/* Integrated ThailandAddressSelector (Province, District, Subdistrict, Postal Code) */}
+                    <div>
+                      <ThailandAddressSelector
+                        value={{
+                          province: formData.province,
+                          district: formData.district,
+                          subdistrict: formData.subdistrict,
+                          postalCode: formData.postalCode,
+                        }}
+                        onChange={(nextAddr) => {
+                          setFormData((prev) => ({
+                            ...prev,
+                            province: nextAddr.province,
+                            district: nextAddr.district,
+                            subdistrict: nextAddr.subdistrict,
+                            postalCode: nextAddr.postalCode,
+                          }));
+                          setErrors((prev) => ({
+                            ...prev,
+                            province: undefined,
+                            district: undefined,
+                            subdistrict: undefined,
+                            postalCode: undefined,
+                          }));
+                          if (serverError) setServerError(null);
+                        }}
+                        disabled={isProcessing}
+                        errors={{
+                          province: errors.province,
+                          district: errors.district,
+                          subdistrict: errors.subdistrict,
+                          postalCode: errors.postalCode,
+                        }}
+                      />
                     </div>
                   </div>
                 </section>
 
-                {/* 2. Payment Method Selector (Prototype) */}
+                {/* 3. Payment Method Selector */}
                 <section className="space-y-6 pt-4 border-t border-neutral-200">
                   <div className="flex items-center justify-between pb-3 border-b border-neutral-200">
                     <h2 className="text-sm font-black uppercase tracking-wider text-black">
-                      2. PAYMENT METHOD (PROTOTYPE)
+                      3. PAYMENT METHOD
                     </h2>
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-400 bg-neutral-100 px-2 py-0.5 rounded-[4px]">
-                      Simulated Checkout
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-[4px] border border-emerald-200">
+                      SECURE RPC
                     </span>
                   </div>
 
-                  <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-[8px] text-[11px] text-neutral-500 leading-relaxed">
-                    <strong>Notice:</strong> This is a design prototype. No credit card or actual money will be charged.
-                  </div>
-
                   <div className="space-y-3">
-                    {/* COD Option */}
-                    <label
-                      className={`flex items-start gap-3.5 p-4 rounded-[8px] border cursor-pointer transition-all ${
-                        paymentMethod === "cod"
-                          ? "border-black bg-neutral-50 ring-1 ring-black"
-                          : "border-neutral-200 hover:border-neutral-400 bg-white"
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="payment"
-                        value="cod"
-                        checked={paymentMethod === "cod"}
-                        onChange={() => setPaymentMethod("cod")}
-                        className="mt-1 text-black focus:ring-black"
-                      />
-                      <div className="space-y-0.5">
-                        <span className="text-xs font-bold uppercase tracking-wider text-black block">
-                          Cash on Delivery (COD)
-                        </span>
-                        <p className="text-[11px] text-neutral-500 leading-tight">
-                          Pay in cash upon physical garment delivery at your doorstep.
-                        </p>
-                      </div>
-                    </label>
-
                     {/* Bank Transfer Option */}
                     <label
                       className={`flex items-start gap-3.5 p-4 rounded-[8px] border cursor-pointer transition-all ${
-                        paymentMethod === "transfer"
+                        paymentMethod === "bank_transfer"
                           ? "border-black bg-neutral-50 ring-1 ring-black"
                           : "border-neutral-200 hover:border-neutral-400 bg-white"
                       }`}
@@ -465,25 +649,26 @@ export default function CheckoutPage() {
                       <input
                         type="radio"
                         name="payment"
-                        value="transfer"
-                        checked={paymentMethod === "transfer"}
-                        onChange={() => setPaymentMethod("transfer")}
+                        value="bank_transfer"
+                        disabled={isProcessing}
+                        checked={paymentMethod === "bank_transfer"}
+                        onChange={() => setPaymentMethod("bank_transfer")}
                         className="mt-1 text-black focus:ring-black"
                       />
                       <div className="space-y-0.5">
                         <span className="text-xs font-bold uppercase tracking-wider text-black block">
-                          Direct Bank Transfer / PromptPay QR
+                          Direct Bank Transfer (Kasikornbank)
                         </span>
                         <p className="text-[11px] text-neutral-500 leading-tight">
-                          Transfer details and QR code will be provided on the order confirmation screen.
+                          Transfer directly to DOMPI official bank account. Account details will be presented upon dispatch confirmation.
                         </p>
                       </div>
                     </label>
 
-                    {/* Card Option (Preview) */}
+                    {/* PromptPay Option */}
                     <label
                       className={`flex items-start gap-3.5 p-4 rounded-[8px] border cursor-pointer transition-all ${
-                        paymentMethod === "card"
+                        paymentMethod === "promptpay"
                           ? "border-black bg-neutral-50 ring-1 ring-black"
                           : "border-neutral-200 hover:border-neutral-400 bg-white"
                       }`}
@@ -491,50 +676,19 @@ export default function CheckoutPage() {
                       <input
                         type="radio"
                         name="payment"
-                        value="card"
-                        checked={paymentMethod === "card"}
-                        onChange={() => setPaymentMethod("card")}
+                        value="promptpay"
+                        disabled={isProcessing}
+                        checked={paymentMethod === "promptpay"}
+                        onChange={() => setPaymentMethod("promptpay")}
                         className="mt-1 text-black focus:ring-black"
                       />
-                      <div className="space-y-0.5 flex-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold uppercase tracking-wider text-black">
-                            Credit / Debit Card (Preview)
-                          </span>
-                          <span className="text-[10px] text-neutral-400 font-bold uppercase">
-                            Visa &bull; MC &bull; JCB
-                          </span>
-                        </div>
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-bold uppercase tracking-wider text-black block">
+                          PromptPay QR
+                        </span>
                         <p className="text-[11px] text-neutral-500 leading-tight">
-                          Encrypted prototype payment gateway with zero physical transaction.
+                          Instant mobile payment using any Thai banking application via PromptPay QR code.
                         </p>
-                        {paymentMethod === "card" && (
-                          <div className="pt-3 space-y-2.5">
-                            <input
-                              type="text"
-                              placeholder="Card number (Mock)"
-                              defaultValue="4000 1234 5678 9010"
-                              disabled
-                              className="w-full bg-white border border-neutral-300 rounded-[8px] px-3 py-2 text-xs text-neutral-600"
-                            />
-                            <div className="grid grid-cols-2 gap-2">
-                              <input
-                                type="text"
-                                placeholder="MM/YY"
-                                defaultValue="12/28"
-                                disabled
-                                className="w-full bg-white border border-neutral-300 rounded-[8px] px-3 py-2 text-xs text-neutral-600"
-                              />
-                              <input
-                                type="text"
-                                placeholder="CVV"
-                                defaultValue="888"
-                                disabled
-                                className="w-full bg-white border border-neutral-300 rounded-[8px] px-3 py-2 text-xs text-neutral-600"
-                              />
-                            </div>
-                          </div>
-                        )}
                       </div>
                     </label>
                   </div>
@@ -545,10 +699,10 @@ export default function CheckoutPage() {
               <div className="lg:col-span-5 bg-neutral-50 border border-neutral-200 rounded-[8px] p-6 sm:p-8 lg:sticky lg:top-24 space-y-6">
                 <div className="flex items-center justify-between pb-4 border-b border-neutral-200">
                   <h2 className="text-sm font-black uppercase tracking-tight text-black">
-                    ORDER SUMMARY
+                    BAG SUMMARY
                   </h2>
                   <span className="text-xs font-bold text-neutral-500 uppercase tracking-wider">
-                    {items.length} {items.length === 1 ? "Item" : "Items"}
+                    {items.length} {items.length === 1 ? "Piece" : "Pieces"}
                   </span>
                 </div>
 
@@ -590,17 +744,17 @@ export default function CheckoutPage() {
                   })}
                 </div>
 
-                {/* Financial Breakdown */}
+                {/* Financial Breakdown (Estimated UI before secure placement) */}
                 <div className="space-y-3 text-xs tracking-tight border-t border-neutral-200 pt-4">
                   <div className="flex justify-between text-neutral-600">
-                    <span>Subtotal</span>
+                    <span>Estimated Subtotal</span>
                     <span className="font-bold text-black">
                       THB {subtotal.toLocaleString()}
                     </span>
                   </div>
 
                   <div className="flex justify-between text-neutral-600">
-                    <span>Shipping</span>
+                    <span>Estimated Shipping</span>
                     <span className="font-bold text-black">
                       {shipping === 0 ? (
                         <span className="text-neutral-900 font-extrabold uppercase">
@@ -614,12 +768,17 @@ export default function CheckoutPage() {
 
                   <div className="border-t border-neutral-200 pt-3 flex justify-between items-baseline">
                     <span className="text-xs font-black uppercase tracking-wider text-black">
-                      TOTAL AMOUNT
+                      ESTIMATED TOTAL
                     </span>
                     <span className="text-2xl font-black tracking-tight text-black">
                       THB {total.toLocaleString()}
                     </span>
                   </div>
+                </div>
+
+                <div className="p-3 bg-white border border-neutral-200 rounded-[6px] text-[11px] text-neutral-500 leading-normal">
+                  <strong className="text-black font-semibold">Authoritative Guarantee:</strong>{" "}
+                  Final pricing and inventory reservation are confirmed authoritatively by the database transaction upon clicking Place Order.
                 </div>
 
                 {/* Submit Action */}
@@ -646,7 +805,7 @@ export default function CheckoutPage() {
                   </button>
 
                   <p className="text-[10px] text-center text-neutral-400 leading-tight">
-                    By placing your order, you agree to DOMPI terms of service and store archival policies.
+                    By confirming this order, inventory will be reserved and logged to the DOMPI archive queue.
                   </p>
                 </div>
               </div>

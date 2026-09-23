@@ -9,11 +9,12 @@ export interface CartItem {
   color: string;
   size: string;
   quantity: number;
+  variantId?: string;
 }
 
 interface CartContextType {
   items: CartItem[];
-  addItem: (product: Product, color: string, size: string, quantity?: number) => void;
+  addItem: (product: Product, color: string, size: string, quantity?: number, variantId?: string) => void;
   removeItem: (itemId: string) => void;
   updateQuantity: (itemId: string, quantity: number) => void;
   clearCart: () => void;
@@ -99,10 +100,18 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   );
 
   const addItem = useCallback(
-    (product: Product, color: string, size: string, quantity = 1) => {
+    (product: Product, color: string, size: string, quantity = 1, variantId?: string) => {
       const safeColor = color || (product.colors?.[0]?.name ?? "Standard");
       const safeSize = size || (product.sizes?.[0] ?? "M");
       const compositeId = `${product.id}-${safeColor}-${safeSize}`;
+
+      const resolvedVariantId =
+        variantId ||
+        (product as { variants?: { id: string; color: string; size: string }[] }).variants?.find(
+          (v) =>
+            v.color.toLowerCase() === safeColor.toLowerCase() &&
+            v.size.toLowerCase() === safeSize.toLowerCase()
+        )?.id;
 
       const current = cartStore.items;
       const existingIndex = current.findIndex((item) => item.id === compositeId);
@@ -115,6 +124,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         updated[existingIndex] = {
           ...updated[existingIndex],
           quantity: Math.min(newQty, maxQty),
+          variantId: updated[existingIndex].variantId || resolvedVariantId,
         };
       } else {
         updated = [
@@ -125,6 +135,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
             color: safeColor,
             size: safeSize,
             quantity: Math.min(quantity, product.stock || 99),
+            variantId: resolvedVariantId,
           },
         ];
       }

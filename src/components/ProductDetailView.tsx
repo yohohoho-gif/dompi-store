@@ -90,7 +90,13 @@ export default function ProductDetailView({
     if (!finalSize || !selectedColor) return;
     if (quantity < 1 || quantity > activeVariantStock) return;
 
-    addItem(product, selectedColor, finalSize, quantity);
+    const matchedVariant = product.variants?.find(
+      (v) =>
+        v.color.toLowerCase() === selectedColor.toLowerCase() &&
+        v.size.toLowerCase() === finalSize.toLowerCase()
+    );
+
+    addItem(product, selectedColor, finalSize, quantity, matchedVariant?.id);
     setAddedToCart(true);
     setTimeout(() => setAddedToCart(false), 2000);
   };
@@ -101,7 +107,13 @@ export default function ProductDetailView({
     if (!finalSize || !selectedColor) return;
     if (quantity < 1 || quantity > activeVariantStock) return;
 
-    addItem(product, selectedColor, finalSize, quantity);
+    const matchedVariant = product.variants?.find(
+      (v) =>
+        v.color.toLowerCase() === selectedColor.toLowerCase() &&
+        v.size.toLowerCase() === finalSize.toLowerCase()
+    );
+
+    addItem(product, selectedColor, finalSize, quantity, matchedVariant?.id);
     router.push("/cart");
   };
 
